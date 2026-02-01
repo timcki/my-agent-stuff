@@ -4,7 +4,7 @@ Skills for [pi coding agent](https://github.com/badlogic/pi-mono).
 
 ## Install
 ```bash
-pi install git:github.com/YOURUSERNAME/my-agent-skills
+pi install git:github.com/timcki/my-agent-stuff
 ```
 
 ## Skills
