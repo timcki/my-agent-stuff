@@ -1,0 +1,8 @@
+{
+  "name": "my-agent-skills",
+  "version": "1.0.0",
+  "description": "Skills and extensions for pi coding agent",
+  "pi": {
+    "skills": "skills"
+  }
+}
