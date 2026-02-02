@@ -25,7 +25,8 @@ This project uses jujutsu (jj) instead of git. Always use `jj` commands.
 
 1. `jj new` to start working
 2. Make changes (auto-tracked, no staging)
-3. `jj commit -m "msg"` or `jj describe` + `jj new`
+3. **Before committing: read the `commit` skill for message format and confirmation requirements**
+4. `jj commit -m "msg"` or `jj describe` + `jj new`
 
 ## Notes
 
