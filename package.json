@@ -5,6 +5,9 @@
   "pi": {
     "skills": [
       "./skills"
+    ],
+    "themes": [
+      "./pi-themes"
     ]
   }
 }
