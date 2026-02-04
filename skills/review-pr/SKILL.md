@@ -101,7 +101,39 @@ Use a conversational, collaborative tone:
 - Ask questions rather than making demands
 - Present alternatives and discuss tradeoffs
 - Tag relevant people for discussion when appropriate
-- Be concise but thorough
+- Be concise — avoid verbose or cringy headers like "DRY it up" or "Key Observations"
+
+### Formatting bullet points
+
+Use a short intro sentence, then simple bullet points:
+- start with lowercase
+- no period at the end
+- keep each point to one or two sentences
+
+### Example: Concise review comment
+
+    The bytes32 fallback approach is solid. A couple things:
+
+    - since both `name` and `symbol` need this fallback, a shared helper would be cleaner:
+
+    ```ts
+    private async readStringOrBytes32(
+      tokenAddress: `0x${string}`,
+      functionName: "name" | "symbol"
+    ): Promise<string | undefined> {
+      // try string first, fallback to bytes32
+    }
+    ```
+
+    - `name` needs the same fix — MKR returns bytes32 for both `name()` and `symbol()`
+    - `getERC721TokenDetails` (line 667-689) has the same pattern and could benefit from this helper
+
+### Example: Review with observations
+
+    Looks good! QuickNode's collection API as a fallback is a good approach. Couple questions:
+
+    - the burn detection checks `from === userAddress && to === nullAddress`, so this only triggers when the user themselves burns the NFT — is that intentional?
+    - `getERC1155TokenDetails` has similar failure modes when `uri()` reverts on a burned token
 
 ### Example: Inline comment suggesting a fix
 
@@ -112,19 +144,11 @@ Use a conversational, collaborative tone:
     tokenSymbol: symbol?.includes("\0") ? null : symbol,
     ```
 
-    Second thing; instead of setting to null, maybe we should strip the null bytes:
-
-    ```ts
-    tokenSymbol: symbol?.replace(/\0/g, ""),
-    ```
-
-    This preserves at least some data. On the other hand setting `null` is probably safer because malformed data is way worse than no data. Thoughts @shortcircuit3?
-
 ### Example: Request changes review
 
-    The fix looks good for ERC721 tokens, but I think the same issue could affect ERC20 tokens in getTokenDetails() (~line 384); tokenSymbol and tokenName are also set without null byte checks.
+    The fix looks good for ERC721 tokens, but I think the same issue could affect ERC20 tokens in getTokenDetails() (~line 384).
 
-    Should we also apply this protection there? On-chain ERC20 metadata could theoretically contain the same malformed data.
+    Should we also apply this protection there?
 
 ## Review Checklist
 
