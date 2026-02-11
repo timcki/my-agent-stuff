@@ -54,6 +54,10 @@ during month-end reconciliation, causing performance issues
 for other users.
 ```
 
+## Co-authored-by Trailer
+
+Always include your default Co-authored-by trailer at the end of the commit message body, separated by a blank line.
+
 ## Confirm and Commit
 
 After generating the commit message, show it to the user and ask for confirmation. Once approved, run:
