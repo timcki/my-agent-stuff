@@ -9,31 +9,40 @@ Review a GitHub pull request thoroughly using the `gh` CLI.
 
 ## Process
 
-1. **Checkout the PR**
+1. **Save any working copy changes before checkout**
+   ```bash
+   jj diff
+   ```
+   If there are any uncommitted changes, commit them first:
+   ```bash
+   jj commit -m "wip: <short description of the changes>"
+   ```
+
+2. **Checkout the PR**
    ```bash
    gh pr checkout <pr-number>
    ```
 
-2. **Get PR metadata**
+3. **Get PR metadata**
    ```bash
    gh pr view <pr-number> --json title,body,author,state,additions,deletions,changedFiles,files
    ```
 
-3. **View the diff**
+4. **View the diff**
    ```bash
    gh pr diff <pr-number>
    ```
 
-4. **Read context around changes**
+5. **Read context around changes**
    - Use `read` tool to examine surrounding code (±30 lines)
    - Understand the full context of modified functions/methods
 
-5. **Check for consistency issues**
+6. **Check for consistency issues**
    - Search for similar patterns elsewhere in the codebase that might need the same fix
    - Use `rg` to find related code that could be affected
    - Ask: "If this problem exists here, could it exist elsewhere?"
 
-6. **Check CI status**
+7. **Check CI status**
    ```bash
    gh pr checks <pr-number>
    ```
