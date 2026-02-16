@@ -103,6 +103,20 @@ zkSync Era wallet syncs were broken after migrating to the native explorer API i
 Verified all 4 wallets from the issue sync successfully.
 ```
 
+---
+
+**Title:**
+```
+Regenerate e2e schema after unsoldBuyReportId int64 change
+```
+
+**Body:**
+```
+#131 updated `UnsoldBuyReportId` to `int64` in the Go models but didn't regenerate the e2e schema. The `unsold_buy_report_id` columns in `init.sql` were still `INTEGER` instead of `BIGINT`. I ran `go run ./cmd/generate_schema` to sync `e2e/scripts/db/init.sql` with the updated models.
+```
+
+Note: for small, self-explanatory changes a simple paragraph is fine — no need for a `### Changes` section or bullet points.
+
 ## Confirm Before Creating
 
 Always show the full title and description to the user and ask for confirmation before running `gh pr create`.
