@@ -49,58 +49,67 @@ Review a GitHub pull request thoroughly using the `gh` CLI.
 
 ## Submitting Feedback
 
-**Always show the comment/review text to the user first and ask for confirmation before submitting.**
+### Iterating on comments with the user
 
-**Add a comment:**
+Don't submit all feedback at once. Present each inline comment one by one:
+
+1. Show the draft comment with the target file and line
+2. Wait for the user to approve or suggest tweaks
+3. Adjust wording as needed, then move to the next comment
+4. Once all comments are finalized, ask the user two things before submitting:
+   - **Review type**: `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`
+   - **Top-level review message**: the summary body for the review
+5. Submit the review only after both are confirmed
+
+This ensures the user has full control over tone, content, and review type before anything is posted.
+
+### Submitting a review with inline comments via API
+
+Use `gh api` to submit a single review with all inline comments at once. This is preferred over `gh pr review` which doesn't support line-specific comments.
+
+**Get owner/repo:**
 ```bash
-gh pr review <pr-number> --comment --body "comment text"
+gh repo view --json owner,name -q '"\(.owner.login)/\(.name)"'
 ```
 
-**Request changes:**
+**Submit review with inline comments:**
 ```bash
-gh pr review <pr-number> --request-changes --body "explanation"
+gh api repos/{owner}/{repo}/pulls/{pr-number}/reviews \
+  --input - <<'EOF'
+{
+  "event": "REQUEST_CHANGES",
+  "body": "Top-level review summary here.",
+  "comments": [
+    {
+      "path": "path/to/file.ts",
+      "line": 42,
+      "side": "RIGHT",
+      "body": "Your comment here"
+    },
+    {
+      "path": "path/to/other-file.ts",
+      "line": 100,
+      "side": "RIGHT",
+      "body": "Another comment"
+    }
+  ]
+}
+EOF
 ```
 
-**Approve:**
-```bash
-gh pr review <pr-number> --approve --body "optional comment"
-```
+**Event types:** `REQUEST_CHANGES`, `APPROVE`, `COMMENT`
 
-## Adding Line-Specific Comments via API
-
-For comments on specific lines (not supported by `gh pr review`), use `gh api` directly:
-
-**Single line comment:**
-```bash
-gh api repos/{owner}/{repo}/pulls/{pr-number}/comments \
-  -f body="Your comment here" \
-  -f path="path/to/file.ts" \
-  -f commit_id="$(gh pr view <pr-number> --json headRefOid -q .headRefOid)" \
-  -F line=42 \
-  -f side="RIGHT"
-```
-
-**Multi-line comment (highlight a range):**
-```bash
-gh api repos/{owner}/{repo}/pulls/{pr-number}/comments \
-  -f body="Your comment here" \
-  -f path="path/to/file.ts" \
-  -f commit_id="$(gh pr view <pr-number> --json headRefOid -q .headRefOid)" \
-  -F start_line=40 \
-  -F line=45 \
-  -f start_side="RIGHT" \
-  -f side="RIGHT"
-```
-
-**Parameters:**
+**Comment parameters:**
 - `path`: file path relative to repo root
 - `line`: the line number in the diff to comment on
 - `side`: `RIGHT` for additions (new code), `LEFT` for deletions (old code)
-- `start_line`/`start_side`: for multi-line comments, the starting line
+- `start_line`/`start_side`: optional, for multi-line comments
 
-**Get owner/repo from current directory:**
+**Simple reviews without inline comments:**
 ```bash
-gh repo view --json owner,name -q '"\(.owner.login)/\(.name)"'
+gh pr review <pr-number> --comment --body "comment text"
+gh pr review <pr-number> --request-changes --body "explanation"
+gh pr review <pr-number> --approve --body "optional comment"
 ```
 
 ## Writing Style
@@ -158,6 +167,45 @@ Use a short intro sentence, then simple bullet points:
     The fix looks good for ERC721 tokens, but I think the same issue could affect ERC20 tokens in getTokenDetails() (~line 384).
 
     Should we also apply this protection there?
+
+### Example: Iterating on comments with the user
+
+Present each comment one by one and wait for approval:
+
+    **Comment 1** — `parseClaim`, catch block (new line ~357):
+
+    > In `parseCompleteTransfer` the catch correctly re-throws non-`UnsupportedCurrencyError`
+    > exceptions, but here they're silently swallowed and fall through to
+    > `throw new UnsupportedTxnError(... "Unsupported event-type")`; misleading if the real error
+    > was e.g. a network failure. Should add `throw err` for consistency:
+    >
+    > ```ts
+    > } catch (err: unknown) {
+    >   if (err instanceof UnsupportedCurrencyError) {
+    >     throw new UnsupportedTxnError(this.getId(), err.toString(), transfer);
+    >   }
+    >   throw err;
+    > }
+    > ```
+
+    Good to go, or want changes?
+
+After user confirms, move to the next:
+
+    **Comment 2** — `transformTransfers`, the removed try/catch (around line 594):
+
+    > Removing this catch also drops the `logger.warn` for unsupported txns; the error still
+    > propagates and crashes the sync, but now without any logs. I'd keep the warning log even
+    > if we simplify the catch.
+
+    Good to go?
+
+After all comments are confirmed, ask for review type and message:
+
+    All comments finalized. Before submitting:
+
+    1. **Review type**: `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`?
+    2. **Top-level message**: any summary you'd like, or should I draft one?
 
 ## Review Checklist
 
