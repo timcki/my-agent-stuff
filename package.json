@@ -8,6 +8,9 @@
     ],
     "themes": [
       "./pi-themes"
+    ],
+    "extensions": [
+      "./extensions"
     ]
   }
 }
