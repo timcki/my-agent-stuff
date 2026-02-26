@@ -58,9 +58,19 @@ for other users.
 
 Always include your default Co-authored-by trailer at the end of the commit message body, separated by a blank line.
 
+## Edit Draft Before Confirming
+
+If the `edit_proposed_text` tool is available, run it on the draft commit message before asking for confirmation:
+
+- `purpose`: `commit message`
+- `fileExtension`: `gitcommit`
+- `text`: full commit message draft
+
+Use the returned text as the final proposed message.
+
 ## Confirm and Commit
 
-After generating the commit message, show it to the user and ask for confirmation. Once approved, run:
+After generating (and optionally editing) the commit message, show it to the user and ask for confirmation. Once approved, run:
 
 ```bash
 jj commit -m "<message>"

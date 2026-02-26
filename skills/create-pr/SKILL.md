@@ -29,9 +29,14 @@ Create a GitHub pull request following project standards, with proper Linear iss
    jj log -r '::@ & trunk()::@'
    ```
 
-5. **Draft the PR description** and show it to the user for confirmation
+5. **Draft the PR title + description**
 
-6. **Create the PR** using the gh CLI:
+6. **If available, run `edit_proposed_text`** to let the user edit drafts before confirmation:
+   - first for title (`purpose: PR title`, `fileExtension: txt`)
+   - then for body (`purpose: PR description`, `fileExtension: md`)
+   Use the returned text as final title/body.
+
+7. **Create the PR** using the gh CLI:
    ```bash
    gh pr create --head <branch-name> --title "<title>" --body "<body>"
    ```
@@ -119,6 +124,6 @@ Note: for small, self-explanatory changes a simple paragraph is fine — no need
 
 ## Confirm Before Creating
 
-Always show the full title and description to the user and ask for confirmation before running `gh pr create`.
+Always show the full (possibly edited) title and description to the user and ask for confirmation before running `gh pr create`.
 
 Do NOT create the PR without user approval.
