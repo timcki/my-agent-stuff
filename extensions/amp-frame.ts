@@ -61,13 +61,27 @@ function getJjRevision(cwd: string): string | null {
 	const now = Date.now();
 	if (cachedJjRev !== undefined && now - cachedJjTime < JJ_CACHE_TTL) return cachedJjRev;
 	try {
-		const result = execSync("jj log --no-graph --ignore-working-copy -r @ -T 'change_id.shortest(4)'", {
+		const rev = execSync("jj log --no-graph --ignore-working-copy -r @ -T 'change_id.shortest(4)'", {
 			cwd,
 			encoding: "utf8",
 			timeout: 2000,
 			stdio: ["pipe", "pipe", "pipe"],
 		}).trim();
-		cachedJjRev = result || null;
+		if (!rev) {
+			cachedJjRev = null;
+		} else {
+			const desc = execSync("jj log --no-graph --ignore-working-copy -r @ -T 'description.first_line()'", {
+				cwd,
+				encoding: "utf8",
+				timeout: 2000,
+				stdio: ["pipe", "pipe", "pipe"],
+			}).trim();
+			const MAX_DESC = 24;
+			const short = desc
+				? desc.length > MAX_DESC ? desc.slice(0, MAX_DESC) + "…" : desc
+				: "";
+			cachedJjRev = short ? `${rev} ${short}` : rev;
+		}
 	} catch {
 		cachedJjRev = null;
 	}
