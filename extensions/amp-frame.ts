@@ -52,14 +52,15 @@ let currentCtx: ExtensionContext | undefined;
 /** Footer data provider reference (set when custom footer is installed). */
 let footerDataRef: any = undefined;
 
-/** Cached jj revision to avoid shelling out on every render. */
-let cachedJjRev: string | null | undefined = undefined;
+/** Cached jj revision (id + description separately for coloring). */
+let cachedJjId: string | null | undefined = undefined;
+let cachedJjDesc: string | null = null;
 let cachedJjTime = 0;
 const JJ_CACHE_TTL = 5000;
 
-function getJjRevision(cwd: string): string | null {
+function refreshJjRevision(cwd: string): void {
 	const now = Date.now();
-	if (cachedJjRev !== undefined && now - cachedJjTime < JJ_CACHE_TTL) return cachedJjRev;
+	if (cachedJjId !== undefined && now - cachedJjTime < JJ_CACHE_TTL) return;
 	try {
 		const rev = execSync("jj log --no-graph --ignore-working-copy -r @ -T 'change_id.shortest(4)'", {
 			cwd,
@@ -68,8 +69,10 @@ function getJjRevision(cwd: string): string | null {
 			stdio: ["pipe", "pipe", "pipe"],
 		}).trim();
 		if (!rev) {
-			cachedJjRev = null;
+			cachedJjId = null;
+			cachedJjDesc = null;
 		} else {
+			cachedJjId = rev;
 			const desc = execSync("jj log --no-graph --ignore-working-copy -r @ -T 'description.first_line()'", {
 				cwd,
 				encoding: "utf8",
@@ -77,16 +80,15 @@ function getJjRevision(cwd: string): string | null {
 				stdio: ["pipe", "pipe", "pipe"],
 			}).trim();
 			const MAX_DESC = 24;
-			const short = desc
+			cachedJjDesc = desc
 				? desc.length > MAX_DESC ? desc.slice(0, MAX_DESC) + "…" : desc
-				: "";
-			cachedJjRev = short ? `${rev} ${short}` : rev;
+				: null;
 		}
 	} catch {
-		cachedJjRev = null;
+		cachedJjId = null;
+		cachedJjDesc = null;
 	}
 	cachedJjTime = now;
-	return cachedJjRev;
 }
 
 /** Collect all extension status texts into a single string. */
@@ -208,13 +210,19 @@ function setupFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 				let cwd = ctx.cwd;
 				if (cwd.startsWith(homedir)) cwd = "~" + cwd.slice(homedir.length);
 
-				const jjRev = getJjRevision(ctx.cwd);
+				refreshJjRevision(ctx.cwd);
 				const gitBranch = footerData.getGitBranch();
-				const revStr = jjRev || gitBranch || "";
 
 				const sep = theme.fg("dim" as any, " · ");
 				const leftParts: string[] = [theme.fg("muted" as any, cwd)];
-				if (revStr) leftParts.push(theme.fg("accent" as any, revStr));
+				if (cachedJjId) {
+					const descPart = cachedJjDesc
+						? " " + theme.fg("dim" as any, cachedJjDesc)
+						: "";
+					leftParts.push(theme.fg("accent" as any, cachedJjId) + descPart);
+				} else if (gitBranch) {
+					leftParts.push(theme.fg("accent" as any, gitBranch));
+				}
 				const left = leftParts.join(sep);
 
 				// ── Right: context bar + model ──
