@@ -1,37 +1,26 @@
 /**
  * amp-frame.ts – Decorates the editor's rendered frame with rounded corners
- * and side borders (amp-style), without patching pi-amplike.
+ * and side borders (amp-style). Also provides a compact single-line footer
+ * showing path, jj/git revision, context usage, and model info.
  *
- * Works by monkey-patching `ctx.ui.setEditorComponent` so every editor factory
- * (including the one from pi-amplike/modes) gets its `render()` output
- * transformed post-hoc.
- *
- * Approach: call the original render(width - 2) to get narrower output, then
- * wrap each line with frame characters (╭╮│╰╯). This avoids needing padding
- * spaces and works correctly for any number of content lines.
+ * Extension statuses (like "YOLO mode") are integrated right-aligned into the
+ * frame's bottom border instead of appearing as separate footer lines.
  *
  * Kill switch: set PI_AMP_FRAME=0 in environment to disable.
- *
- * Assumptions (checked defensively – falls back to unmodified output):
- *   - First line of render() output is a top border made of "─" characters
- *     (possibly with ANSI coloring and/or a scroll indicator / mode label).
- *   - Last non-autocomplete line is a bottom border of the same shape.
- *   - Content lines in between are padded text (no side borders).
- *   - Autocomplete lines (if any) follow the bottom border.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { execSync } from "node:child_process";
+import os from "node:os";
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
 
-/** Strip ANSI escape sequences to get visible text. */
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
-/** Visible (printable) width, ignoring ANSI escapes. */
 const visWidth = (s: string): number => {
 	let w = 0;
-	const plain = stripAnsi(s);
-	for (const _ of plain) w++;
+	for (const _ of stripAnsi(s)) w++;
 	return w;
 };
 
@@ -45,10 +34,6 @@ const VERTICAL = "│";
 
 // ── Border detection ──────────────────────────────────────────────────────────
 
-/**
- * Heuristic: a line is a horizontal border if ≥40% of its visible chars are "─".
- * Generous enough for scroll indicators and mode labels.
- */
 function isBorderLine(line: string): boolean {
 	const plain = stripAnsi(line);
 	if (plain.length === 0) return false;
@@ -59,15 +44,65 @@ function isBorderLine(line: string): boolean {
 	return dashes / plain.length >= 0.4;
 }
 
-// ── Core transform ───────────────────────────────────────────────────────────
+// ── Shared state ──────────────────────────────────────────────────────────────
+
+/** Latest extension context (updated on session_start/switch). */
+let currentCtx: ExtensionContext | undefined;
+
+/** Footer data provider reference (set when custom footer is installed). */
+let footerDataRef: any = undefined;
+
+/** Cached jj revision to avoid shelling out on every render. */
+let cachedJjRev: string | null | undefined = undefined;
+let cachedJjTime = 0;
+const JJ_CACHE_TTL = 5000;
+
+function getJjRevision(cwd: string): string | null {
+	const now = Date.now();
+	if (cachedJjRev !== undefined && now - cachedJjTime < JJ_CACHE_TTL) return cachedJjRev;
+	try {
+		const result = execSync("jj log --no-graph --ignore-working-copy -r @ -T 'change_id.shortest(4)'", {
+			cwd,
+			encoding: "utf8",
+			timeout: 2000,
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
+		cachedJjRev = result || null;
+	} catch {
+		cachedJjRev = null;
+	}
+	cachedJjTime = now;
+	return cachedJjRev;
+}
+
+/** Collect all extension status texts into a single string. */
+function getExtensionStatusLabel(): string | null {
+	if (!footerDataRef) return null;
+	try {
+		const statuses: ReadonlyMap<string, string> = footerDataRef.getExtensionStatuses();
+		if (!statuses || statuses.size === 0) return null;
+		return [...statuses.values()].join(" · ");
+	} catch {
+		return null;
+	}
+}
+
+function fmtTokens(n: number): string {
+	if (n < 1000) return `${n}`;
+	if (n < 100_000) return `${(n / 1000).toFixed(1)}k`;
+	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+	return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+// ── Core frame transform ─────────────────────────────────────────────────────
 
 /**
- * Transform lines rendered at innerWidth into a framed output at outerWidth.
+ * Transform editor lines rendered at `innerWidth` into a framed output.
  *
  * - Top border:    ╭ + border + ╮
- * - Content lines: │ + content + │  (content padded/trimmed to innerWidth)
- * - Bottom border: ╰ + border + ╯
- * - Autocomplete:  " " + line + " " (visual alignment below frame)
+ * - Content lines: │ + content + │
+ * - Bottom border: ╰ + border (with optional right-aligned label) + ╯
+ * - Autocomplete:  indented below frame
  *
  * Returns null if border detection fails → caller uses fallback.
  */
@@ -75,13 +110,11 @@ function transformFrame(
 	lines: string[],
 	innerWidth: number,
 	colorFn: (s: string) => string,
+	bottomLabel?: { text: string; colorFn: (s: string) => string } | null,
 ): string[] | null {
 	if (lines.length < 2) return null;
-
-	// Top border = first line; must be a border.
 	if (!isBorderLine(lines[0]!)) return null;
 
-	// Bottom border = last border line; anything after is autocomplete.
 	let bottomIdx = -1;
 	for (let i = lines.length - 1; i > 0; i--) {
 		if (isBorderLine(lines[i]!)) {
@@ -102,26 +135,37 @@ function transformFrame(
 	for (let i = 1; i < bottomIdx; i++) {
 		const line = lines[i]!;
 		const vw = visWidth(line);
-
 		if (vw === innerWidth) {
-			// Exact width — just wrap.
 			out.push(left + line + right);
 		} else if (vw < innerWidth) {
-			// Pad right to fill.
 			out.push(left + line + " ".repeat(innerWidth - vw) + right);
 		} else {
-			// Wider than expected (cursor overflow edge case) — trim visible chars
-			// from the right. Walk backwards to find the trim point.
-			// Safe fallback: just wrap as-is (may be 1 char too wide, but avoids
-			// breaking ANSI/cursor sequences).
 			out.push(left + line + right);
 		}
 	}
 
-	// Bottom border: ╰ ... ╯
-	out.push(colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT));
+	// Bottom border: ╰ ... ╯ (with optional right-aligned status label)
+	if (bottomLabel?.text) {
+		const labelChunk = ` ${bottomLabel.text} `;
+		const labelVisWidth = labelChunk.length;
+		const trailingDash = 1;
+		const leftDashes = innerWidth - labelVisWidth - trailingDash;
 
-	// Autocomplete lines: indent to align with content inside frame.
+		if (leftDashes >= 4) {
+			const bottom =
+				colorFn("─".repeat(leftDashes)) +
+				bottomLabel.colorFn(labelChunk) +
+				colorFn("─");
+			out.push(colorFn(BOTTOM_LEFT) + bottom + colorFn(BOTTOM_RIGHT));
+		} else {
+			// Not enough room for label — plain border
+			out.push(colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT));
+		}
+	} else {
+		out.push(colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT));
+	}
+
+	// Autocomplete lines: indent to align with content inside frame
 	for (let i = bottomIdx + 1; i < lines.length; i++) {
 		out.push(" " + lines[i]! + " ");
 	}
@@ -129,16 +173,88 @@ function transformFrame(
 	return out;
 }
 
+// ── Custom single-line footer ────────────────────────────────────────────────
+
+function setupFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
+	if (!ctx.hasUI) return;
+
+	ctx.ui.setFooter((tui, theme, footerData) => {
+		footerDataRef = footerData;
+		const unsub = footerData.onBranchChange(() => {
+			cachedJjTime = 0; // invalidate jj cache
+			tui.requestRender();
+		});
+
+		return {
+			dispose: unsub,
+			invalidate() {},
+			render(width: number): string[] {
+				// ── Left: path · revision ──
+				const homedir = os.homedir();
+				let cwd = ctx.cwd;
+				if (cwd.startsWith(homedir)) cwd = "~" + cwd.slice(homedir.length);
+
+				const jjRev = getJjRevision(ctx.cwd);
+				const gitBranch = footerData.getGitBranch();
+				const revStr = jjRev || gitBranch || "";
+
+				const sep = theme.fg("dim" as any, " · ");
+				const leftParts: string[] = [theme.fg("muted" as any, cwd)];
+				if (revStr) leftParts.push(theme.fg("accent" as any, revStr));
+				const left = leftParts.join(sep);
+
+				// ── Right: context bar + model ──
+				const rightParts: string[] = [];
+
+				// Context usage: ━━━━━───── 200k (continuous bar)
+				const usage = ctx.getContextUsage?.();
+				if (usage) {
+					const pct = usage.percent ?? 0;
+					const barLen = 10;
+					const filled = Math.round((Math.min(pct, 100) / 100) * barLen);
+					const bar = "━".repeat(filled) + "─".repeat(barLen - filled);
+					const total = fmtTokens(usage.contextWindow);
+					const barColor: any =
+						pct > 80 ? "error" : pct > 50 ? "warning" : "muted";
+					rightParts.push(
+						theme.fg(barColor, bar) + theme.fg("dim" as any, ` ${total}`),
+					);
+				}
+
+				// Model + thinking level
+				const model = ctx.model;
+				if (model) {
+					const thinkingLevel = pi.getThinkingLevel();
+					const thinkingStr =
+						thinkingLevel && thinkingLevel !== "off"
+							? theme.fg("dim" as any, ` · ${thinkingLevel}`)
+							: "";
+					rightParts.push(
+						theme.fg("muted" as any, model.id) + thinkingStr,
+					);
+				}
+
+				const right = rightParts.join(sep);
+
+				const leftW = visibleWidth(left);
+				const rightW = visibleWidth(right);
+				const pad = " ".repeat(Math.max(1, width - leftW - rightW));
+
+				return [truncateToWidth(left + pad + right, width)];
+			},
+		};
+	});
+}
+
 // ── Extension entry point ────────────────────────────────────────────────────
 
 /** Symbol used to mark that we've already patched setEditorComponent. */
 const PATCHED = Symbol.for("amp-frame-patched");
 
-/** Minimum outer width to apply framing. Below this, skip decoration. */
+/** Minimum outer width to apply framing. */
 const MIN_FRAME_WIDTH = 6;
 
 export default function ampFrame(pi: ExtensionAPI) {
-	// Kill switch
 	if (process.env.PI_AMP_FRAME === "0") return;
 
 	function patchSetEditorComponent(ctx: ExtensionContext) {
@@ -162,7 +278,6 @@ export default function ampFrame(pi: ExtensionAPI) {
 				const originalRender = editor.render.bind(editor);
 
 				editor.render = (width: number): string[] => {
-					// Too narrow for frame — render normally.
 					if (width < MIN_FRAME_WIDTH) return originalRender(width);
 
 					const innerWidth = width - 2;
@@ -174,13 +289,35 @@ export default function ampFrame(pi: ExtensionAPI) {
 								? editor.borderColor
 								: (s: string) => s;
 
-						const framed = transformFrame(lines, innerWidth, colorFn);
+						// Build bottom-border label from extension statuses
+						const statusText = getExtensionStatusLabel();
+						const bottomLabel = statusText
+							? {
+									text: statusText,
+									colorFn: (s: string) => {
+										try {
+											return currentCtx!.ui.theme.fg(
+												"frameLabel" as any,
+												s,
+											);
+										} catch {
+											return s;
+										}
+									},
+								}
+							: null;
+
+						const framed = transformFrame(
+							lines,
+							innerWidth,
+							colorFn,
+							bottomLabel,
+						);
 						if (framed) return framed;
 					} catch {
-						// Fall through to fallback.
+						// Fall through to fallback
 					}
 
-					// Fallback: re-render at full width, undecorated.
 					return originalRender(width);
 				};
 
@@ -191,11 +328,12 @@ export default function ampFrame(pi: ExtensionAPI) {
 		};
 	}
 
-	pi.on("session_start", (_event, ctx) => {
+	function setup(_event: any, ctx: ExtensionContext) {
+		currentCtx = ctx;
 		patchSetEditorComponent(ctx);
-	});
+		setupFooter(pi, ctx);
+	}
 
-	pi.on("session_switch", (_event, ctx) => {
-		patchSetEditorComponent(ctx);
-	});
+	pi.on("session_start", setup);
+	pi.on("session_switch", setup);
 }

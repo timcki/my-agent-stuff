@@ -10,6 +10,7 @@ pi install git:github.com/timcki/my-agent-stuff
 ## Skills
 
 - **commit** - Read this skill before making git commits
+- **edit-draft** - Open draft text in an external editor with guaranteed prefill
 - **jujutsu** - Use jujutsu (jj) for version control instead of git
 
 ## Extensions

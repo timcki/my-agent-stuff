@@ -54,12 +54,12 @@ Review a GitHub pull request thoroughly using the `gh` CLI.
 Don't submit all feedback at once. Present each inline comment one by one:
 
 1. Show the draft comment with the target file and line
-2. Wait for the user to approve or suggest tweaks
-3. Adjust wording as needed, then move to the next comment
-4. Once all comments are finalized, ask the user two things before submitting:
-   - **Review type**: `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`
-   - **Top-level review message**: the summary body for the review
-5. Submit the review only after both are confirmed
+2. If `edit_proposed_text` is available, open the comment in the editor (`purpose: review comment`, `fileExtension: md`) so the user can refine wording
+3. If not available, wait for the user to approve or suggest tweaks inline
+4. Move to the next comment
+5. Once all comments are finalized, draft the top-level review message and open it in `edit_proposed_text` (`purpose: review summary`, `fileExtension: md`) if available
+6. Ask the user for **review type**: `COMMENT`, `REQUEST_CHANGES`, or `APPROVE`
+7. Submit the review only after both message and type are confirmed
 
 This ensures the user has full control over tone, content, and review type before anything is posted.
 

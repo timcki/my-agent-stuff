@@ -81,6 +81,7 @@
 		"thinkingHigh": "magenta",
 		"thinkingXhigh": "blue",
 
-		"bashMode": "green"
+		"bashMode": "green",
+		"frameLabel": "yellow"
 	}
 }

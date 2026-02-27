@@ -65,7 +65,7 @@ function getLaunchArgs(options: {
 	editorCommand: string;
 }): string[] {
 	const args = ["run", "--close-on-exit", "--cwd", options.cwd];
-	if (options.floating) args.push("--floating");
+	if (options.floating) args.push("--floating", "--pinned", "true");
 	args.push(
 		"--name",
 		"pi-edit",
@@ -76,6 +76,23 @@ function getLaunchArgs(options: {
 		options.editorCommand,
 	);
 	return args;
+}
+
+function getLastAssistantText(ctx: ExtensionContext): string | undefined {
+	const branch = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i] as any;
+		if (entry?.type !== "message") continue;
+		const message = entry?.message;
+		if (!message || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		const text = message.content
+			.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+			.map((part: any) => part.text)
+			.join("\n")
+			.trim();
+		if (text.length > 0) return text;
+	}
+	return undefined;
 }
 
 async function editText(
@@ -113,7 +130,18 @@ editor_cmd="$3"
 if [ -z "$editor_cmd" ]; then
 	editor_cmd="nvim"
 fi
-bash -lc "$editor_cmd \"\$1\"" -- "$file"
+
+export PI_EDIT_TEXT_FILE="$file"
+
+if [[ "$editor_cmd" == *"{file}"* ]]; then
+	cmd="$(printf '%s' "$editor_cmd" | sed 's#{file}#"$PI_EDIT_TEXT_FILE"#g')"
+	bash -lc "$cmd"
+elif [[ "$editor_cmd" == *"\$1"* ]]; then
+	bash -lc "$editor_cmd" -- "$PI_EDIT_TEXT_FILE"
+else
+	bash -lc "$editor_cmd \"\$PI_EDIT_TEXT_FILE\""
+fi
+
 exit_code=$?
 printf "%s\n" "$exit_code" > "$done_file"
 `;
@@ -305,8 +333,10 @@ export default function editProposedText(pi: ExtensionAPI) {
 			if (!ctx.hasUI) return;
 
 			const current = ctx.ui.getEditorText();
+			const fallback = current.trim().length > 0 ? undefined : getLastAssistantText(ctx);
+			const initialText = current.trim().length > 0 ? current : (fallback ?? current);
 			const result = await editText(pi, ctx, {
-				text: current,
+				text: initialText,
 				purpose: "current input",
 				fileExtension: "md",
 				floating: true,
@@ -329,6 +359,8 @@ export default function editProposedText(pi: ExtensionAPI) {
 			ctx.ui.setEditorText(result.text);
 			if (result.details.changed) {
 				ctx.ui.notify("Updated input from external editor", "info");
+			} else if (fallback) {
+				ctx.ui.notify("Loaded last assistant message in external editor", "info");
 			} else {
 				ctx.ui.notify("Editor closed (no text changes)", "info");
 			}
