@@ -110,6 +110,39 @@ function fmtTokens(n: number): string {
 	return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+// ── Context bar gradient ──────────────────────────────────────────────────────
+
+type RGB = [number, number, number];
+
+/** Color stops matching the theme's base16-tomorrow-night palette. */
+const GRADIENT_STOPS: Array<{ pct: number; color: RGB }> = [
+	{ pct: 0, color: [181, 189, 104] },   // green  (#b5bd68)
+	{ pct: 20, color: [181, 189, 104] },   // green  (hold)
+	{ pct: 35, color: [240, 198, 116] },   // yellow (#f0c674)
+	{ pct: 55, color: [222, 147, 95] },    // orange (#de935f)
+	{ pct: 100, color: [204, 102, 102] },  // red    (#cc6666)
+];
+
+function lerpColor(pct: number): RGB {
+	for (let i = 0; i < GRADIENT_STOPS.length - 1; i++) {
+		const a = GRADIENT_STOPS[i]!;
+		const b = GRADIENT_STOPS[i + 1]!;
+		if (pct >= a.pct && pct <= b.pct) {
+			const t = b.pct === a.pct ? 0 : (pct - a.pct) / (b.pct - a.pct);
+			return [
+				Math.round(a.color[0] + t * (b.color[0] - a.color[0])),
+				Math.round(a.color[1] + t * (b.color[1] - a.color[1])),
+				Math.round(a.color[2] + t * (b.color[2] - a.color[2])),
+			];
+		}
+	}
+	return GRADIENT_STOPS[GRADIENT_STOPS.length - 1]!.color;
+}
+
+function fgRgb(r: number, g: number, b: number, text: string): string {
+	return `\x1b[38;2;${r};${g};${b}m${text}\x1b[39m`;
+}
+
 // ── Core frame transform ─────────────────────────────────────────────────────
 
 /**
@@ -228,18 +261,25 @@ function setupFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 				// ── Right: context bar + model ──
 				const rightParts: string[] = [];
 
-				// Context usage: ━━━━━───── 200k (continuous bar)
+				// Context usage: gradient bar + window size
 				const usage = ctx.getContextUsage?.();
 				if (usage) {
 					const pct = usage.percent ?? 0;
 					const barLen = 10;
 					const filled = Math.round((Math.min(pct, 100) / 100) * barLen);
-					const bar = "━".repeat(filled) + "─".repeat(barLen - filled);
+					let bar = "";
+					for (let i = 0; i < barLen; i++) {
+						if (i < filled) {
+							const segPct = ((i + 0.5) / barLen) * 100;
+							const [r, g, b] = lerpColor(segPct);
+							bar += fgRgb(r, g, b, "━");
+						} else {
+							bar += theme.fg("dim" as any, "─");
+						}
+					}
 					const total = fmtTokens(usage.contextWindow);
-					const barColor: any =
-						pct > 80 ? "error" : pct > 50 ? "warning" : "muted";
 					rightParts.push(
-						theme.fg(barColor, bar) + theme.fg("dim" as any, ` ${total}`),
+						bar + theme.fg("dim" as any, ` ${total}`),
 					);
 				}
 
