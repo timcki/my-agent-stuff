@@ -43,3 +43,14 @@ Keybind:
 
 Environment:
 - uses `PI_EDIT_TEXT_EDITOR`, then `$VISUAL`, then `$EDITOR`, then `nvim`
+
+### jina-web-tools
+
+Adds two tools backed by Jina APIs:
+- `web_search`: web search via `https://s.jina.ai`
+- `visit_webpage`: page extraction via `https://r.jina.ai` (and image URL download support)
+
+Behavior:
+- uses `JINA_API_KEY` when available (for higher rate limits)
+- truncates large outputs and saves full output to temp files when needed
+- `visit_webpage` retries transient Jina reader errors (451/5xx)
