@@ -5,6 +5,7 @@ import {
 	formatSize,
 	truncateHead,
 } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +17,9 @@ const DEFAULT_VISIT_TIMEOUT_SECONDS = 60;
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_CONTENT_LENGTH = 100_000; // chars
 const VISIT_RETRY_DELAYS_MS = [0, 30_000, 90_000];
+
+const SEARCH_MAX_RESULTS = 8;
+const EXPANDED_PREVIEW_LINES = 30;
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
 	"image/png": ".png",
@@ -34,10 +38,58 @@ type VisitWebpageParams = {
 	timeoutSeconds?: number;
 };
 
+type SearchEntry = {
+	index: number;
+	title?: string;
+	url?: string;
+	description?: string;
+	date?: string;
+};
+
+type CompactSearchResult = {
+	text: string;
+	resultCount: number;
+	shownResults: number;
+	titles: string[];
+};
+
+type CompactWebpageResult = {
+	text: string;
+	title?: string;
+	publishedTime?: string;
+	sourceUrl?: string;
+	lineCount: number;
+};
+
 function getContentType(contentTypeHeader: string | null): string | null {
 	if (!contentTypeHeader) return null;
 	const normalized = contentTypeHeader.toLowerCase().split(";")[0]?.trim();
 	return normalized || null;
+}
+
+function normalizeNewlines(text: string): string {
+	return text.replace(/\r/g, "");
+}
+
+function splitLines(text: string): string[] {
+	return normalizeNewlines(text).split("\n");
+}
+
+function extractTextFromToolResult(result: any): string {
+	if (!result?.content || !Array.isArray(result.content)) return "";
+	return result.content
+		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
+		.map((part: any) => part.text)
+		.join("\n")
+		.trim();
+}
+
+function previewText(text: string, maxLines: number): string {
+	const lines = splitLines(text);
+	if (lines.length <= maxLines) return text;
+	const shown = lines.slice(0, maxLines).join("\n").trimEnd();
+	const remaining = lines.length - maxLines;
+	return `${shown}\n... (${remaining} more lines)`;
 }
 
 function getHeaders(options?: {
@@ -147,6 +199,138 @@ function validateHttpUrl(url: string): URL {
 	return parsed;
 }
 
+function parseJinaSearchResults(rawBody: string): SearchEntry[] {
+	const entries = new Map<number, SearchEntry>();
+	const lineRegex = /^\[(\d+)\] (Title|URL Source|Description|Date):\s*(.*)$/;
+
+	for (const line of splitLines(rawBody)) {
+		const match = line.match(lineRegex);
+		if (!match) continue;
+
+		const index = Number.parseInt(match[1] ?? "", 10);
+		if (Number.isNaN(index)) continue;
+
+		const field = match[2];
+		const value = (match[3] ?? "").trim();
+		const entry = entries.get(index) ?? { index };
+
+		if (field === "Title") entry.title = value;
+		else if (field === "URL Source") entry.url = value;
+		else if (field === "Description") entry.description = value;
+		else if (field === "Date") entry.date = value;
+
+		entries.set(index, entry);
+	}
+
+	return [...entries.values()].sort((a, b) => a.index - b.index);
+}
+
+function formatCompactSearchResults(rawBody: string, maxResults: number): CompactSearchResult {
+	const parsed = parseJinaSearchResults(rawBody);
+
+	if (parsed.length === 0) {
+		const fallback = rawBody.trim();
+		const titles = splitLines(fallback)
+			.filter((line) => line.trim().length > 0)
+			.slice(0, maxResults)
+			.map((line) => line.trim());
+		return {
+			text: fallback,
+			resultCount: titles.length,
+			shownResults: titles.length,
+			titles,
+		};
+	}
+
+	const shown = parsed.slice(0, maxResults);
+	const lines: string[] = [];
+
+	for (const [idx, entry] of shown.entries()) {
+		const number = idx + 1;
+		const safeTitle = entry.title?.trim() || "(untitled result)";
+		if (entry.url) lines.push(`${number}. [${safeTitle}](${entry.url})`);
+		else lines.push(`${number}. ${safeTitle}`);
+
+		if (entry.description) lines.push(`   - ${entry.description.trim()}`);
+		if (entry.date) lines.push(`   - ${entry.date.trim()}`);
+	}
+
+	const hiddenCount = parsed.length - shown.length;
+	if (hiddenCount > 0) {
+		lines.push(`\n... ${hiddenCount} more results omitted`);
+	}
+
+	return {
+		text: lines.join("\n").trim(),
+		resultCount: parsed.length,
+		shownResults: shown.length,
+		titles: shown.map((entry) => entry.title?.trim() || "(untitled result)"),
+	};
+}
+
+function stripLeadingMetadataLines(lines: string[]): string[] {
+	const metadataRegex = /^(Title:|URL Source:|Published Time:|Markdown Content:)\s*/;
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i] ?? "";
+		if (line.trim().length === 0 || metadataRegex.test(line.trim())) {
+			i++;
+			continue;
+		}
+		break;
+	}
+	return lines.slice(i);
+}
+
+function formatCompactWebpageContent(url: string, readerBody: string): CompactWebpageResult {
+	const normalized = normalizeNewlines(readerBody).trim();
+	const lines = splitLines(normalized);
+
+	let title: string | undefined;
+	let publishedTime: string | undefined;
+	let sourceUrl: string | undefined;
+	let markdownStart = -1;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = (lines[i] ?? "").trim();
+		if (!title && line.startsWith("Title:")) {
+			title = line.slice("Title:".length).trim() || undefined;
+			continue;
+		}
+		if (!sourceUrl && line.startsWith("URL Source:")) {
+			sourceUrl = line.slice("URL Source:".length).trim() || undefined;
+			continue;
+		}
+		if (!publishedTime && line.startsWith("Published Time:")) {
+			publishedTime = line.slice("Published Time:".length).trim() || undefined;
+			continue;
+		}
+		if (line === "Markdown Content:") {
+			markdownStart = i + 1;
+			break;
+		}
+	}
+
+	const rawBodyLines = markdownStart >= 0 ? lines.slice(markdownStart) : stripLeadingMetadataLines(lines);
+	let body = rawBodyLines.join("\n").trim();
+	body = body.replace(/\n{3,}/g, "\n\n");
+
+	const heading = title?.trim() ? `## ${title.trim()}` : `## Content from ${url}`;
+	const metaLines = [`URL: ${url}`];
+	if (publishedTime) metaLines.push(`Published: ${publishedTime}`);
+	if (sourceUrl && sourceUrl !== url) metaLines.push(`Source: ${sourceUrl}`);
+
+	const text = `${heading}\n${metaLines.join("\n")}\n\n${body}`.trim();
+
+	return {
+		text,
+		title,
+		publishedTime,
+		sourceUrl,
+		lineCount: splitLines(text).length,
+	};
+}
+
 export default function jinaWebTools(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "web_search",
@@ -160,6 +344,42 @@ export default function jinaWebTools(pi: ExtensionAPI) {
 				}),
 			),
 		}),
+
+		renderCall(args: any, theme: any) {
+			const query = typeof args?.query === "string" ? args.query.trim() : "";
+			const label = query ? `\"${query}\"` : "(empty query)";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("web_search"))} ${theme.fg("accent", label)}`,
+				0,
+				0,
+			);
+		},
+
+		renderResult(result: any, options: any, theme: any) {
+			if (options?.isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
+
+			const details = result?.details ?? {};
+			if (details.ok === false || result?.isError) {
+				const err = extractTextFromToolResult(result) || "web_search failed";
+				return new Text(theme.fg("error", err), 0, 0);
+			}
+
+			const resultCount = Number(details.resultCount ?? 0);
+			if (!options?.expanded) {
+				let text = theme.fg("muted", `↳ ${resultCount} results`);
+				const titles: string[] = Array.isArray(details.titles) ? details.titles.slice(0, 3) : [];
+				if (titles.length > 0) {
+					text += `\n${theme.fg("toolOutput", titles.map((t, i) => `${i + 1}. ${t}`).join("\n"))}`;
+				}
+				if (details.truncated) text += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
+				return new Text(text, 0, 0);
+			}
+
+			const fullText = extractTextFromToolResult(result);
+			let preview = previewText(fullText, EXPANDED_PREVIEW_LINES);
+			if (details.truncated) preview += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
+			return new Text(theme.fg("toolOutput", preview), 0, 0);
+		},
 
 		async execute(_toolCallId, rawParams, signal) {
 			const params = rawParams as WebSearchParams;
@@ -210,11 +430,14 @@ export default function jinaWebTools(pi: ExtensionAPI) {
 						ok: true,
 						query,
 						resultCount: 0,
+						shownResults: 0,
+						titles: [],
 					},
 				};
 			}
 
-			const output = `## Search Results\n\n${body}`;
+			const compact = formatCompactSearchResults(body, SEARCH_MAX_RESULTS);
+			const output = `## Search Results\n\n${compact.text}`;
 			const truncation = truncateHead(output, {
 				maxLines: DEFAULT_MAX_LINES,
 				maxBytes: DEFAULT_MAX_BYTES,
@@ -234,6 +457,9 @@ export default function jinaWebTools(pi: ExtensionAPI) {
 					query,
 					requestUrl: url,
 					status: response.status,
+					resultCount: compact.resultCount,
+					shownResults: compact.shownResults,
+					titles: compact.titles,
 					truncated: truncation.truncated,
 					truncation: truncation.truncated ? truncation : undefined,
 					fullOutputPath,
@@ -255,6 +481,42 @@ export default function jinaWebTools(pi: ExtensionAPI) {
 				}),
 			),
 		}),
+
+		renderCall(args: any, theme: any) {
+			const url = typeof args?.url === "string" ? args.url : "(invalid url)";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("visit_webpage"))} ${theme.fg("accent", url)}`,
+				0,
+				0,
+			);
+		},
+
+		renderResult(result: any, options: any, theme: any) {
+			if (options?.isPartial) return new Text(theme.fg("warning", "fetching webpage..."), 0, 0);
+
+			const details = result?.details ?? {};
+			if (details.ok === false || result?.isError) {
+				const err = extractTextFromToolResult(result) || "visit_webpage failed";
+				return new Text(theme.fg("error", err), 0, 0);
+			}
+
+			if (details.mode === "image") {
+				const text = `${theme.fg("muted", "↳ image downloaded")}\n${theme.fg("toolOutput", details.path || "(no path)")}`;
+				return new Text(text, 0, 0);
+			}
+
+			if (!options?.expanded) {
+				let text = theme.fg("muted", `↳ webpage fetched (${details.lineCount ?? "?"} lines)`);
+				if (details.title) text += `\n${theme.fg("toolOutput", details.title)}`;
+				if (details.truncated) text += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
+				return new Text(text, 0, 0);
+			}
+
+			const fullText = extractTextFromToolResult(result);
+			let preview = previewText(fullText, EXPANDED_PREVIEW_LINES);
+			if (details.truncated) preview += `\n${theme.fg("warning", "(truncated by backend limits)")}`;
+			return new Text(theme.fg("toolOutput", preview), 0, 0);
+		},
 
 		async execute(_toolCallId, rawParams, signal, onUpdate) {
 			const params = rawParams as VisitWebpageParams;
@@ -473,12 +735,12 @@ export default function jinaWebTools(pi: ExtensionAPI) {
 				};
 			}
 
-			let cleaned = readerBody.replace(/\n{3,}/g, "\n\n");
-			if (cleaned.length > MAX_CONTENT_LENGTH) {
-				cleaned = `${cleaned.slice(0, MAX_CONTENT_LENGTH)}\n\n..._Content truncated_...`;
+			const compact = formatCompactWebpageContent(url, readerBody);
+			let output = compact.text;
+			if (output.length > MAX_CONTENT_LENGTH) {
+				output = `${output.slice(0, MAX_CONTENT_LENGTH)}\n\n..._Content truncated_...`;
 			}
 
-			const output = `## Content from ${url}\n\n${cleaned}`;
 			const truncation = truncateHead(output, {
 				maxLines: DEFAULT_MAX_LINES,
 				maxBytes: DEFAULT_MAX_BYTES,
@@ -498,6 +760,10 @@ export default function jinaWebTools(pi: ExtensionAPI) {
 					mode: "webpage",
 					url,
 					jinaUrl,
+					title: compact.title,
+					publishedTime: compact.publishedTime,
+					sourceUrl: compact.sourceUrl,
+					lineCount: compact.lineCount,
 					truncated: truncation.truncated,
 					truncation: truncation.truncated ? truncation : undefined,
 					fullOutputPath,

@@ -44,6 +44,44 @@ Keybind:
 Environment:
 - uses `PI_EDIT_TEXT_EDITOR`, then `$VISUAL`, then `$EDITOR`, then `nvim`
 
+### toolview-compact
+
+Compact, safe rendering for built-in tool output. Replaces the default rendering of `read`, `bash`, `edit`, `write`, `find`, `grep`, and `ls` with compact summaries that collapse long output and sanitize unsafe escape sequences (OSC, ANSI, control chars) to prevent crashes.
+
+**Features:**
+- **Compact summaries** — one-line status with key metadata (path, line count, exit code, match count, etc.)
+- **Collapse long output** — shows first 3 + last 2 lines with hidden count; expand with `Ctrl+O`
+- **Safe rendering** — strips OSC (hyperlinks, notifications), ANSI SGR, and control chars before layout
+- **Presets** — `regular` (collapse >40 lines or >4000 chars) and `terse` (>15 lines or >1500 chars)
+- **Per-tool toggles** — enable/disable compact rendering per tool
+- **Raw mode** — optionally show unsanitized output in expanded view
+
+**Commands:**
+| Command | Description |
+|---------|-------------|
+| `/toolview show` | Show current config |
+| `/toolview preset terse\|regular` | Switch collapse thresholds |
+| `/toolview tool <name> on\|off` | Enable/disable a tool override (restart required) |
+| `/toolview raw on\|off` | Toggle raw output mode |
+
+**Config:** `~/.pi/tool-display-compact.json`
+
+```json
+{
+  "preset": "regular",
+  "rawViewEnabled": false,
+  "toolEnabled": {
+    "read": true, "bash": true, "edit": true, "write": true,
+    "find": true, "grep": true, "ls": true
+  },
+  "thresholds": {
+    "regular": { "maxLines": 40, "maxChars": 4000 },
+    "terse": { "maxLines": 15, "maxChars": 1500 }
+  },
+  "preview": { "headLines": 3, "tailLines": 2 }
+}
+```
+
 ### jina-web-tools
 
 Adds two tools backed by Jina APIs:
