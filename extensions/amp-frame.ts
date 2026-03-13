@@ -143,6 +143,32 @@ function fgRgb(r: number, g: number, b: number, text: string): string {
 	return `\x1b[38;2;${r};${g};${b}m${text}\x1b[39m`;
 }
 
+// ── Background color helpers ──────────────────────────────────────────────────
+
+/** Extract the first background color escape sequence found in a string. */
+function getFirstBg(s: string): string | null {
+	const re = /\x1b\[([0-9;]*)m/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(s)) !== null) {
+		const codes = m[1]!.split(";").filter(Boolean).map(Number);
+		for (let i = 0; i < codes.length; i++) {
+			const c = codes[i]!;
+			if ((c >= 40 && c <= 47) || (c >= 100 && c <= 107)) {
+				return `\x1b[${c}m`;
+			} else if (c === 48 && i + 1 < codes.length) {
+				if (codes[i + 1] === 5 && i + 2 < codes.length) {
+					return `\x1b[48;5;${codes[i + 2]}m`;
+				} else if (codes[i + 1] === 2 && i + 4 < codes.length) {
+					return `\x1b[48;2;${codes[i + 2]};${codes[i + 3]};${codes[i + 4]}m`;
+				}
+			}
+		}
+	}
+	return null;
+}
+
+const RESET_BG = "\x1b[49m";
+
 // ── Core frame transform ─────────────────────────────────────────────────────
 
 /**
@@ -177,23 +203,37 @@ function transformFrame(
 	const left = colorFn(VERTICAL);
 	const right = colorFn(VERTICAL);
 
+	// Detect background color from content lines (first one wins)
+	let contentBg: string | null = null;
+	for (let i = 1; i < bottomIdx; i++) {
+		contentBg = getFirstBg(lines[i]!);
+		if (contentBg) break;
+	}
+
 	// Top border: ╭ ... ╮
-	out.push(colorFn(TOP_LEFT) + lines[0] + colorFn(TOP_RIGHT));
+	if (contentBg) {
+		out.push(contentBg + colorFn(TOP_LEFT) + lines[0] + colorFn(TOP_RIGHT) + RESET_BG);
+	} else {
+		out.push(colorFn(TOP_LEFT) + lines[0] + colorFn(TOP_RIGHT));
+	}
 
 	// Content lines: │ ... │
 	for (let i = 1; i < bottomIdx; i++) {
 		const line = lines[i]!;
 		const vw = visWidth(line);
-		if (vw === innerWidth) {
-			out.push(left + line + right);
-		} else if (vw < innerWidth) {
-			out.push(left + line + " ".repeat(innerWidth - vw) + right);
+		const pad = vw < innerWidth ? " ".repeat(innerWidth - vw) : "";
+		if (contentBg) {
+			out.push(contentBg + left + line + contentBg + pad + right + RESET_BG);
+		} else if (pad) {
+			out.push(left + line + pad + right);
 		} else {
 			out.push(left + line + right);
 		}
 	}
 
 	// Bottom border: ╰ ... ╯ (with optional right-aligned status label)
+	const bgPre = contentBg ?? "";
+	const bgPost = contentBg ? RESET_BG : "";
 	if (bottomLabel?.text) {
 		const labelChunk = ` ${bottomLabel.text} `;
 		const labelVisWidth = labelChunk.length;
@@ -205,13 +245,12 @@ function transformFrame(
 				colorFn("─".repeat(leftDashes)) +
 				bottomLabel.colorFn(labelChunk) +
 				colorFn("─");
-			out.push(colorFn(BOTTOM_LEFT) + bottom + colorFn(BOTTOM_RIGHT));
+			out.push(bgPre + colorFn(BOTTOM_LEFT) + bottom + colorFn(BOTTOM_RIGHT) + bgPost);
 		} else {
-			// Not enough room for label — plain border
-			out.push(colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT));
+			out.push(bgPre + colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT) + bgPost);
 		}
 	} else {
-		out.push(colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT));
+		out.push(bgPre + colorFn(BOTTOM_LEFT) + lines[bottomIdx] + colorFn(BOTTOM_RIGHT) + bgPost);
 	}
 
 	// Autocomplete lines: indent to align with content inside frame
@@ -277,9 +316,8 @@ function setupFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 							bar += theme.fg("dim" as any, "─");
 						}
 					}
-					const total = fmtTokens(usage.contextWindow);
 					rightParts.push(
-						bar + theme.fg("dim" as any, ` ${total}`),
+						bar + theme.fg("dim" as any, ` ${Math.round(pct)}%`),
 					);
 				}
 

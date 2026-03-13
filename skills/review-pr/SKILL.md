@@ -49,9 +49,44 @@ Review a GitHub pull request thoroughly using the `gh` CLI.
 
 ## Submitting Feedback
 
+### Present findings summary first
+
+Before drafting any comments, present all findings as a numbered summary so the user can see the full picture. For each finding, show:
+
+1. A short title describing the issue
+2. A brief code snippet (just the problematic lines, with file and line reference)
+3. A one- or two-sentence explanation of why it matters
+
+Format:
+
+    **1. Silent error swallowing in `parseClaim`**
+    ```ts
+    // src/integrations/wallet/wormhole/index.ts:357
+    } catch (err: unknown) {
+      if (err instanceof UnsupportedCurrencyError) {
+        throw new UnsupportedTxnError(this.getId(), err.toString(), transfer);
+      }
+      // missing: throw err — non-UnsupportedCurrencyError exceptions are silently lost
+    }
+    ```
+    `parseCompleteTransfer` re-throws unknown errors but this catch doesn't, so network failures etc. get swallowed and misreported as "unsupported event-type".
+
+    **2. Removed `logger.warn` for unsupported txns**
+    ```ts
+    // src/integrations/wallet/wormhole/index.ts:~594
+    // the old try/catch had: logger.warn("Unsupported txn", ...)
+    ```
+    Removing the catch also drops the warning log; errors now propagate without any trace in logs.
+
+After presenting the summary, ask the user:
+
+> Any issues you'd like to drop, adjust, or add before I start drafting comments?
+
+Wait for confirmation before proceeding to per-comment iteration.
+
 ### Iterating on comments with the user
 
-Don't submit all feedback at once. Present each inline comment one by one:
+Once the findings are confirmed, draft and present each inline comment one by one:
 
 1. Show the draft comment with the target file and line
 2. If `edit_proposed_text` is available, open the comment in the editor (`purpose: review comment`, `fileExtension: md`) so the user can refine wording
@@ -168,9 +203,35 @@ Use a short intro sentence, then simple bullet points:
 
     Should we also apply this protection there?
 
+### Example: Presenting findings summary
+
+After analyzing the diff, present all findings before drafting comments:
+
+    Found 2 issues:
+
+    **1. Silent error swallowing in `parseClaim`**
+    ```ts
+    // src/integrations/wallet/wormhole/index.ts:357
+    } catch (err: unknown) {
+      if (err instanceof UnsupportedCurrencyError) {
+        throw new UnsupportedTxnError(this.getId(), err.toString(), transfer);
+      }
+    }
+    ```
+    `parseCompleteTransfer` re-throws unknown errors but this catch doesn't — network failures get swallowed and misreported as "unsupported event-type".
+
+    **2. Removed warning log for unsupported txns**
+    ```ts
+    // src/integrations/wallet/wormhole/index.ts:~594
+    // previously: logger.warn("Unsupported txn", ...)
+    ```
+    Removing the try/catch also drops the warning log; errors propagate without any trace.
+
+    Any issues you'd like to drop, adjust, or add before I start drafting comments?
+
 ### Example: Iterating on comments with the user
 
-Present each comment one by one and wait for approval:
+Once the user confirms the findings, present each comment one by one and wait for approval:
 
     **Comment 1** — `parseClaim`, catch block (new line ~357):
 
