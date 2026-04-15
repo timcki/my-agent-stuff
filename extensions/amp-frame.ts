@@ -18,12 +18,6 @@ import os from "node:os";
 
 const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
-const visWidth = (s: string): number => {
-	let w = 0;
-	for (const _ of stripAnsi(s)) w++;
-	return w;
-};
-
 // ── Frame characters ──────────────────────────────────────────────────────────
 
 const TOP_LEFT = "╭";
@@ -35,6 +29,8 @@ const VERTICAL = "│";
 // ── Border detection ──────────────────────────────────────────────────────────
 
 function isBorderLine(line: string): boolean {
+	// Use stripAnsi (SGR-only) here since border lines are simple dashes
+	// and visibleWidth would be overkill.
 	const plain = stripAnsi(line);
 	if (plain.length === 0) return false;
 	let dashes = 0;
@@ -51,6 +47,17 @@ let currentCtx: ExtensionContext | undefined;
 
 /** Footer data provider reference (set when custom footer is installed). */
 let footerDataRef: any = undefined;
+
+/** Current vim mode info (sniffed from pi-vim's VimModeEditor if present). */
+let currentVimMode: { label: string; color: RGB } | null = null;
+
+const VIM_MODE_LABELS: Record<string, { label: string; color: RGB }> = {
+	"insert":      { label: "i", color: [181, 189, 104] }, // green
+	"normal":      { label: "n", color: [240, 198, 116] }, // yellow
+	"visual":      { label: "v", color: [178, 148, 187] }, // purple
+	"visual-line": { label: "V", color: [178, 148, 187] }, // purple
+	"replace":     { label: "r", color: [204, 102, 102] }, // red
+};
 
 /** Cached jj revision (id + description separately for coloring). */
 let cachedJjId: string | null | undefined = undefined;
@@ -91,16 +98,22 @@ function refreshJjRevision(cwd: string): void {
 	cachedJjTime = now;
 }
 
-/** Collect all extension status texts into a single string. */
+/** Collect all extension status texts into a single string, including vim mode. */
 function getExtensionStatusLabel(): string | null {
-	if (!footerDataRef) return null;
-	try {
-		const statuses: ReadonlyMap<string, string> = footerDataRef.getExtensionStatuses();
-		if (!statuses || statuses.size === 0) return null;
-		return [...statuses.values()].join(" · ");
-	} catch {
-		return null;
+	const parts: string[] = [];
+	if (footerDataRef) {
+		try {
+			const statuses: ReadonlyMap<string, string> = footerDataRef.getExtensionStatuses();
+			if (statuses && statuses.size > 0) {
+				parts.push(...statuses.values());
+			}
+		} catch {}
 	}
+	if (currentVimMode) {
+		const [r, g, b] = currentVimMode.color;
+		parts.push(fgRgb(r, g, b, currentVimMode.label));
+	}
+	return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function fmtTokens(n: number): string {
@@ -220,14 +233,17 @@ function transformFrame(
 	// Content lines: │ ... │
 	for (let i = 1; i < bottomIdx; i++) {
 		const line = lines[i]!;
-		const vw = visWidth(line);
-		const pad = vw < innerWidth ? " ".repeat(innerWidth - vw) : "";
+		// Pad to exactly innerWidth using truncateToWidth for robustness.
+		// This handles edge cases where visibleWidth might disagree with
+		// the terminal (e.g. cursor markers, combining chars).
+		const padded = truncateToWidth(
+			line + " ".repeat(innerWidth),
+			innerWidth,
+		);
 		if (contentBg) {
-			out.push(contentBg + left + line + contentBg + pad + right + RESET_BG);
-		} else if (pad) {
-			out.push(left + line + pad + right);
+			out.push(contentBg + left + padded + contentBg + right + RESET_BG);
 		} else {
-			out.push(left + line + right);
+			out.push(left + padded + right);
 		}
 	}
 
@@ -236,7 +252,7 @@ function transformFrame(
 	const bgPost = contentBg ? RESET_BG : "";
 	if (bottomLabel?.text) {
 		const labelChunk = ` ${bottomLabel.text} `;
-		const labelVisWidth = labelChunk.length;
+		const labelVisWidth = visibleWidth(labelChunk);
 		const trailingDash = 1;
 		const leftDashes = innerWidth - labelVisWidth - trailingDash;
 
@@ -348,8 +364,9 @@ function setupFooter(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 // ── Extension entry point ────────────────────────────────────────────────────
 
-/** Symbol used to mark that we've already patched setEditorComponent. */
+/** Symbols used to mark that we've already patched UI methods. */
 const PATCHED = Symbol.for("amp-frame-patched");
+const FOOTER_PATCHED = Symbol.for("amp-frame-footer-patched");
 
 /** Minimum outer width to apply framing. */
 const MIN_FRAME_WIDTH = 6;
@@ -369,6 +386,7 @@ export default function ampFrame(pi: ExtensionAPI) {
 
 		ctx.ui.setEditorComponent = (factory) => {
 			if (!factory) {
+				currentVimMode = null;
 				originalSetEditor(undefined);
 				return;
 			}
@@ -377,7 +395,19 @@ export default function ampFrame(pi: ExtensionAPI) {
 				const editor = factory(tui, theme, keybindings);
 				const originalRender = editor.render.bind(editor);
 
+				// Sniff vim mode from pi-vim's VimModeEditor (private field)
+				const editorAny = editor as any;
+				const hasVimMode = typeof editorAny.mode === "string" && editorAny.mode in VIM_MODE_LABELS;  
+
 				editor.render = (width: number): string[] => {
+					// Update vim mode on every render (mode changes between renders)
+					if (hasVimMode) {
+						const mode = editorAny.mode as string;
+						currentVimMode = VIM_MODE_LABELS[mode] ?? { label: mode[0]!, color: [197, 200, 198] };
+					} else {
+						currentVimMode = null;
+					}
+
 					if (width < MIN_FRAME_WIDTH) return originalRender(width);
 
 					const innerWidth = width - 2;
@@ -428,9 +458,34 @@ export default function ampFrame(pi: ExtensionAPI) {
 		};
 	}
 
+	function patchSetFooter(ctx: ExtensionContext) {
+		if (!ctx.hasUI) return;
+
+		const ui = ctx.ui as any;
+		if (ui[FOOTER_PATCHED]) return;
+		ui[FOOTER_PATCHED] = true;
+
+		const originalSetFooter: typeof ctx.ui.setFooter =
+			ctx.ui.setFooter.bind(ctx.ui);
+
+		// Install amp-frame's footer via the real method, then block
+		// subsequent setFooter calls from other extensions (e.g. pi-vim).
+		let footerInstalled = false;
+
+		ctx.ui.setFooter = (factory) => {
+			if (footerInstalled) {
+				// Silently ignore – amp-frame's footer stays active.
+				return;
+			}
+			footerInstalled = true;
+			originalSetFooter(factory);
+		};
+	}
+
 	function setup(_event: any, ctx: ExtensionContext) {
 		currentCtx = ctx;
 		patchSetEditorComponent(ctx);
+		patchSetFooter(ctx);
 		setupFooter(pi, ctx);
 	}
 
